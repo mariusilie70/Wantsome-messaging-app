@@ -1,47 +1,62 @@
 package server
 
 import (
+	"fmt"
 	"log"
 	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
+
+	"github.com/gorilla/websocket"
 )
 
-var shutdown os.Signal = syscall.SIGUSR1
+type Server struct {
+	router *http.ServeMux
+}
 
-func RunServer() {
-	http.HandleFunc("/", home)
-	http.HandleFunc("/ws", handleConnections)
+func NewServer() *Server {
+	return &Server{
+		router: http.NewServeMux(),
+	}
+}
 
-	go handleMsg()
+func (s *Server) Router() *http.ServeMux {
+	s.router.HandleFunc("/ws", s.handleWebSocket)
+	return s.router
+}
 
-	server := &http.Server{Addr: ":8080"}
+func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	upgrader := websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool { return true },
+	}
 
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, os.Interrupt)
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Println(err)
+		return
+	}
 
-	go func() {
-		log.Printf("Starting server on %s\n", server.Addr)
-		if err := server.ListenAndServe(); err != nil {
-			log.Printf("error starting server: %s", err)
-			stop <- shutdown
+	go s.handleConnection(conn)
+}
+
+func (s *Server) handleConnection(conn *websocket.Conn) {
+	defer conn.Close()
+
+	for {
+		messageType, message, err := conn.ReadMessage()
+		if err != nil {
+			log.Println(err)
+			break
 		}
-	}()
 
-	signal := <-stop
-	log.Printf("Shutting down server ... ")
+		log.Printf("Received message: %s\n", message)
 
-	m.Lock()
-	for conn := range userConnections {
-		conn.Close()
-		delete(userConnections, conn)
+		err = conn.WriteMessage(messageType, []byte(fmt.Sprintf("Server received message: %s", message)))
+		if err != nil {
+			log.Println(err)
+			break
+		}
 	}
-	m.Unlock()
+}
 
-	server.Shutdown(nil)
-	if signal == shutdown {
-		os.Exit(1)
-	}
-
+func (s *Server) Close() {
+	// Perform any necessary cleanup here
 }
